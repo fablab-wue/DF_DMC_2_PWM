@@ -1,28 +1,10 @@
 #include "servo_bank.h"
 
 #include <dmc_protocol.h>
-#include <hardware/clocks.h>
 #include <hardware/gpio.h>
 #include <hardware/pwm.h>
 
 namespace dfpwm {
-
-namespace {
-
-constexpr uint16_t kServoWrap = 65535;
-
-uint16_t usToCompare(int32_t us) {
-  if (us < 0) {
-    us = 0;
-  }
-  const uint32_t cc = (static_cast<uint32_t>(us) * static_cast<uint32_t>(kServoWrap + 1) + 5000u) / 10000u;
-  if (cc > kServoWrap) {
-    return kServoWrap;
-  }
-  return static_cast<uint16_t>(cc);
-}
-
-}  // namespace
 
 void ServoBank::begin(int motorCount) {
   if (motorCount < 0) {
@@ -38,10 +20,8 @@ void ServoBank::begin(int motorCount) {
     return;
   }
 
-  const float div = static_cast<float>(clock_get_hz(clk_sys)) /
-                    (static_cast<float>(kServoHz) * static_cast<float>(kServoWrap + 1));
   pwm_config cfg = pwm_get_default_config();
-  pwm_config_set_clkdiv(&cfg, div);
+  pwm_config_set_clkdiv(&cfg, kServoClkDiv);
   pwm_config_set_wrap(&cfg, kServoWrap);
   bool sliceInited[8] = {};
   for (int s = 0; s < motorCount_; ++s) {
@@ -55,6 +35,8 @@ void ServoBank::begin(int motorCount) {
     gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_8MA);
     steps_[s] = 0;
     enabled_[s] = false;
+    maxStepsPerSec_[s] = 4000;
+    slewOn_[s] = false;
     lowerEn_[s] = false;
     upperEn_[s] = false;
     lower_[s] = kServoMinSteps;
@@ -96,21 +78,115 @@ void ServoBank::writeAxis(int axis0) {
     pwm_set_gpio_level(pin, 0);
     return;
   }
-  const int32_t us = kServoCenterUs + steps_[axis0];
-  pwm_set_gpio_level(pin, usToCompare(us));
+  int32_t level = steps_[axis0] + kServoPwmZero;
+  if (level < kServoPwmMin) {
+    level = kServoPwmMin;
+  }
+  if (level > kServoPwmMax) {
+    level = kServoPwmMax;
+  }
+  pwm_set_gpio_level(pin, static_cast<uint16_t>(level));
 }
 
 void ServoBank::moveToSteps(int axis0, int32_t steps) {
   if (axis0 < 0 || axis0 >= motorCount_) {
     return;
   }
+  slewOn_[axis0] = false;
   steps_[axis0] = clampSteps(axis0, steps);
   writeAxis(axis0);
+  if (!pathActive_) {
+    movingMask_ &= ~(1u << axis0);
+  }
+}
+
+void ServoBank::setMaxSpeed(int axis0, int32_t stepsPerSec) {
+  if (axis0 < 0 || axis0 >= motorCount_) {
+    return;
+  }
+  if (stepsPerSec < 0) {
+    stepsPerSec = -stepsPerSec;
+  }
+  if (stepsPerSec < 1) {
+    stepsPerSec = 1;
+  }
+  maxStepsPerSec_[axis0] = stepsPerSec;
+}
+
+int32_t ServoBank::slewRate(int axis0) const {
+  const int32_t maxRate = maxStepsPerSec_[axis0] < 1 ? 1 : maxStepsPerSec_[axis0];
+  uint32_t speed = slewSpeed_[axis0];
+  if (speed < 1) {
+    speed = 1;
+  }
+  if (speed > 10000) {
+    speed = 10000;
+  }
+  int32_t rate = static_cast<int32_t>((static_cast<int64_t>(maxRate) * speed) / 10000);
+  if (rate < 1) {
+    rate = 1;
+  }
+  return rate;
+}
+
+void ServoBank::slewTo(int axis0, int32_t steps, uint16_t speed) {
+  if (axis0 < 0 || axis0 >= motorCount_) {
+    return;
+  }
+  pathActive_ = false;
+  slewTarget_[axis0] = clampSteps(axis0, steps);
+  slewSpeed_[axis0] = speed == 0 ? 1 : speed;
+  slewOn_[axis0] = steps_[axis0] != slewTarget_[axis0];
+  slewLastMs_ = millis();
+  if (slewOn_[axis0]) {
+    movingMask_ |= (1u << axis0);
+  } else {
+    movingMask_ &= ~(1u << axis0);
+  }
+}
+
+void ServoBank::slewUpdate() {
+  if (pathActive_) {
+    return;
+  }
+  const uint32_t now = millis();
+  uint32_t dt = now - slewLastMs_;
+  if (dt == 0) {
+    return;
+  }
+  if (dt > 100) {
+    dt = 100;
+  }
+  slewLastMs_ = now;
+  for (int a = 0; a < motorCount_; ++a) {
+    if (!slewOn_[a]) {
+      continue;
+    }
+    const int32_t target = slewTarget_[a];
+    int32_t step = static_cast<int32_t>((static_cast<int64_t>(slewRate(a)) * dt) / 1000);
+    if (step < 1) {
+      step = 1;
+    }
+    if (steps_[a] < target) {
+      steps_[a] = steps_[a] > target - step ? target : steps_[a] + step;
+    } else if (steps_[a] > target) {
+      steps_[a] = steps_[a] < target + step ? target : steps_[a] - step;
+    }
+    steps_[a] = clampSteps(a, steps_[a]);
+    writeAxis(a);
+    if (steps_[a] == target) {
+      slewOn_[a] = false;
+      movingMask_ &= ~(1u << a);
+    }
+  }
 }
 
 void ServoBank::stopMotion() {
   pathActive_ = false;
   movingMask_ = 0;
+  for (int a = 0; a < motorCount_; ++a) {
+    slewOn_[a] = false;
+  }
 }
 
 void ServoBank::configure(int axis0, uint8_t flags) {
@@ -166,6 +242,9 @@ void ServoBank::setPathSliceUs(uint32_t us) {
 }
 
 void ServoBank::pathGoRange(int dfStart, int dfEnd) {
+  for (int a = 0; a < motorCount_; ++a) {
+    slewOn_[a] = false;
+  }
   playEndFrame_ = dfEnd;
   playDir_ = dfStart <= dfEnd ? 1 : -1;
   currentFrame_ = dfStart;
@@ -177,6 +256,7 @@ void ServoBank::pathGoRange(int dfStart, int dfEnd) {
 
 void ServoBank::update() {
   if (!pathActive_) {
+    slewUpdate();
     return;
   }
   const uint32_t now = millis();

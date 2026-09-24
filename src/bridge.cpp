@@ -134,7 +134,7 @@ void DmcBridge::maybeSendBootHello() {
 }
 
 void DmcBridge::maybeSendPositionReport() {
-  if (!dfConnected_ || !servos_.pathActive()) {
+  if (!dfConnected_ || !servos_.moving()) {
     return;
   }
   const uint32_t now = millis();
@@ -205,6 +205,7 @@ void DmcBridge::handleDmcFrame(const DmcFrame& frame) {
     sendDmcAck(frame.id, frame.type, kDmcAckErrChecksum);
     return;
   }
+  dfConnected_ = true;
 
   if (frame.type == kDmcMsgHi) {
     dfConnected_ = true;
@@ -237,19 +238,38 @@ void DmcBridge::handleDmcFrame(const DmcFrame& frame) {
       break;
     }
     case kDmcMsgDmx: {
-      uint32_t channel = 1;
-      uint16_t count = 0;
       uint8_t ramp = 0;
-      if (frame.payload.size() < 7 || !readDwordLE(frame.payload, 0, &channel) ||
-          !readWordLE(frame.payload, 4, &count) || !readByte(frame.payload, 6, &ramp)) {
-        sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
-        break;
+      uint16_t channel = 1;
+      uint16_t count = 0;
+      const uint8_t* levels = nullptr;
+      bool parsed = false;
+      if (frame.payload.size() >= 7) {
+        uint32_t channel32 = 0;
+        uint16_t counted = 0;
+        uint8_t rampByte = 0;
+        if (readDwordLE(frame.payload, 0, &channel32) && readWordLE(frame.payload, 4, &counted) &&
+            readByte(frame.payload, 6, &rampByte) && counted > 0 && 7u + counted == frame.payload.size() &&
+            channel32 >= 1 && channel32 <= static_cast<uint32_t>(kDmxChannels)) {
+          channel = static_cast<uint16_t>(channel32);
+          count = counted;
+          ramp = rampByte;
+          levels = frame.payload.data() + 7;
+          parsed = true;
+        }
       }
-      if (count == 0 || 7 + count > frame.payload.size()) {
+      if (!parsed) {
+        if (frame.payload.size() < 4 || !readByte(frame.payload, 0, &ramp) || !readWordLE(frame.payload, 1, &channel)) {
+          sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
+          break;
+        }
+        count = static_cast<uint16_t>(frame.payload.size() - 3);
+        levels = frame.payload.data() + 3;
+      }
+      if (channel < 1 || channel > kDmxChannels || count == 0) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
         break;
       }
-      dmx_.apply(static_cast<uint16_t>(channel), frame.payload.data() + 7, count, ramp != 0);
+      dmx_.apply(channel, levels, count, ramp != 0);
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
       break;
     }
@@ -279,9 +299,8 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
         break;
       }
-      servos_.moveToSteps(motor - 1, position);
+      servos_.slewTo(motor - 1, position, 10000);
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
-      sendMotorPositions(frame.id);
       break;
     }
     case kDmcMsgMotorStop: {
@@ -335,14 +354,12 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
         break;
       }
-      (void)speed;
       if (!motorIndexValid(motor)) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
         break;
       }
-      servos_.moveToSteps(motor - 1, destination);
+      servos_.slewTo(motor - 1, destination, speed == 0 ? 1 : speed);
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
-      sendMotorPositions(frame.id);
       break;
     }
     case kDmcMsgMotorConfigure: {
@@ -369,12 +386,12 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
         break;
       }
-      (void)maxVelocity;
       (void)maxAccel;
       if (!motorIndexValid(motor)) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
         break;
       }
+      servos_.setMaxSpeed(motor - 1, maxVelocity);
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
       break;
     }
@@ -433,9 +450,24 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
       break;
     }
-    case kDmcMsgRtUploadDmx:
-      sendDmcAck(frame.id, frame.type, kDmcAckErrUnsupported);
+    case kDmcMsgRtUploadDmx: {
+      uint16_t channel = 0;
+      uint32_t index = 0;
+      if (frame.payload.size() < 6 || !readWordLE(frame.payload, 0, &channel) || !readDwordLE(frame.payload, 2, &index)) {
+        sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
+        break;
+      }
+      (void)index;
+      if (channel < 1 || channel > kDmxChannels) {
+        sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
+        break;
+      }
+      if (frame.payload.size() == 7) {
+        dmx_.apply(channel, frame.payload.data() + 6, 1, false);
+      }
+      sendDmcAck(frame.id, frame.type, kDmcAckOk);
       break;
+    }
     case kDmcMsgRtUploadTriggers: {
       uint32_t mask = 0;
       if (!readDwordLE(frame.payload, 0, &mask)) {

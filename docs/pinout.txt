@@ -1,0 +1,31 @@
+Raspberry Pi Pico — DF_DMC_2_PWM pinout (top view, USB at top)
+Defaults in src/config.h
+
+ function         pin           pin  function
+                +--- USB ---+
+ PWM_1            GP0      1 |o o| 40 VBUS     VBUS
+ PWM_2            GP1      2 |o o| 39 VSYS     VSYS
+ GND              GND      3 |o o| 38 GND      GND
+ PWM_3            GP2      4 |o o| 37 3V3_EN   3V3_EN
+ PWM_4            GP3      5 |o o| 36 3V3      3V3 OUT
+ PWM_5            GP4      6 |o o| 35 ADC_VREF ADC_VREF
+ PWM_6            GP5      7 |o o| 34 GP28     GIO_IN
+ GND              GND      8 |o o| 33 AGND     ADC GND
+ PWM_7            GP6      9 |o o| 32 GP27     GIO_OUT2
+ PWM_8            GP7     10 |o o| 31 GP26     GIO_OUT1
+ PWM_9            GP8     11 |o o| 30 RUN      RUN
+ PWM_10           GP9     12 |o o| 29 GP22     BUZZER
+ GND              GND     13 |o o| 28 GND      GND
+ PWM_11           GP10    14 |o o| 27 GP21     SW_4
+ PWM_12           GP11    15 |o o| 26 GP20     SW_3
+ PWM_13           GP12    16 |o o| 25 GP19     SW_2
+ PWM_14           GP13    17 |o o| 24 GP18     SW_1
+ GND              GND     18 |o o| 23 GND      GND
+ PWM_15           GP14    19 |o o| 22 GP17     CAMERA
+ PWM_16           GP15    20 |o o| 21 GP16     DMX_TX
+                +-----------+
+
+PWM_1..16 on GP0..15. DMX_TX GP16. CAMERA GP17 (open-collector, active low).
+SW_1..4 on GP18..21, pull-up, ON = low, read once at startup.
+BUZZER GP22 active high. GIO_OUT1..2 GP26..27 open-collector. GIO_IN GP28 pull-up.
+GP25 is the onboard LED (not on the header). GP23/GP24 are Pico power pins, unused here.
