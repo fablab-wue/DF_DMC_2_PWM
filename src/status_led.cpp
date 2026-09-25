@@ -5,8 +5,10 @@ namespace dfpwm {
 void StatusLed::begin() {
   pinMode(kStatusLedPin, OUTPUT);
   digitalWrite(kStatusLedPin, LOW);
-  bootUntilMs_ = millis() + kLedBootOffMs;
+  const uint32_t now = millis();
+  bootUntilMs_ = now + kLedBootOffMs;
   packetUntilMs_ = 0;
+  readyAnchorMs_ = now;
 }
 
 void StatusLed::markPacket() {
@@ -15,6 +17,7 @@ void StatusLed::markPacket() {
     return;
   }
   packetUntilMs_ = now + kLedPacketPulseMs;
+  readyAnchorMs_ = now;
   digitalWrite(kStatusLedPin, HIGH);
 }
 
@@ -32,7 +35,8 @@ void StatusLed::update(bool dfConnected) {
     digitalWrite(kStatusLedPin, ((now / kLedWaitHalfMs) & 1u) ? HIGH : LOW);
     return;
   }
-  digitalWrite(kStatusLedPin, (now % kLedReadyPeriodMs) < kLedReadyPulseMs ? HIGH : LOW);
+  const uint32_t sinceReady = now - readyAnchorMs_;
+  digitalWrite(kStatusLedPin, (sinceReady % kLedReadyPeriodMs) < kLedReadyPulseMs ? HIGH : LOW);
 }
 
 }  // namespace dfpwm

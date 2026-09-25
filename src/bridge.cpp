@@ -1,5 +1,6 @@
 #include "bridge.h"
 
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -84,9 +85,13 @@ void DmcBridge::sendDmcAck(uint32_t id, uint16_t type, uint32_t status) {
 }
 
 void DmcBridge::sendDmcHello(uint32_t id) {
+  char name[48];
+  const int wrote = snprintf(name, sizeof(name), "jDF-PWM V1 %dS+%dL+2O+1I+CT+DMX", mode_.motorCount, mode_.dmxPwmCount);
   std::vector<uint8_t> payload(32, 0);
-  const size_t n = strlen(kDmcHelloName);
-  std::memcpy(payload.data(), kDmcHelloName, n > 32 ? 32 : n);
+  if (wrote > 0) {
+    const size_t n = static_cast<size_t>(wrote) > 32 ? 32 : static_cast<size_t>(wrote);
+    std::memcpy(payload.data(), name, n);
+  }
   appendByte(payload, kHelloVersionMajor);
   appendByte(payload, kHelloVersionMinor);
   appendByte(payload, kHelloVersionRev);

@@ -34,7 +34,6 @@ constexpr uint8_t kHelloVersionMajor = 1;
 constexpr uint8_t kHelloVersionMinor = 0;
 constexpr uint8_t kHelloVersionRev = 0;
 constexpr uint16_t kHelloProtocolVersion = 2;
-constexpr char kDmcHelloName[] = "DF PWM V1 (dmc-lite)";
 
 constexpr uint32_t kPositionReportMs = 100;
 constexpr uint32_t kLedBootOffMs = 500;

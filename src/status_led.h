@@ -13,6 +13,7 @@ class StatusLed {
  private:
   uint32_t bootUntilMs_ = 0;
   uint32_t packetUntilMs_ = 0;
+  uint32_t readyAnchorMs_ = 0;
 };
 
 }  // namespace dfpwm

@@ -16,7 +16,7 @@ Pins: [pins.md](pins.md). DIP: [dip.md](dip.md). Dragonframe scale: [dragonframe
 
 ## Hello
 
-Dragonframe starts with `MSG_HI` (`0x0001`). This board replies as **`DF PWM V1 (dmc-lite)`**. An unsolicited hello is also sent when the USB serial port opens.
+Dragonframe starts with `MSG_HI` (`0x0001`). This board replies as **`jDF-PWM V1 <servos>S+<lights>L+2O+1I+CT+DMX`**. `<servos>` is the DIP motor count and `<lights>` is how many of the remaining pins mirror DMX. SW1 on, SW2 and SW3 off is **`jDF-PWM V1 8S+8L+2O+1I+CT+DMX`**. The name is at most 32 bytes. An unsolicited hello is also sent when the USB serial port opens.
 
 Hello fields, fixed at boot from the DIP:
 
@@ -42,13 +42,13 @@ The onboard LED is one color. There is no NeoPixel.
 | Boot | off for about 0.5 s |
 | Waiting for Dragonframe | toggle at about 4 Hz |
 | Connected | one very short pulse every 1 s |
-| DMC packet | one short pulse per parsed frame, then back to waiting or connected |
+| DMC packet | one short pulse per parsed frame, then back to waiting or connected. A packet restarts the 1 s connected timer |
 
 ## Firmware `src/` map
 
 | File | Role |
 |------|------|
-| `config.h` | Pins, 306.35 Hz servo scale, hello name |
+| `config.h` | Pins, 306.35 Hz servo scale |
 | `servo_bank` | Servo PWM and path playback |
 | `status_led` | Onboard LED |
 | `bridge` | USB DMC dispatch |
