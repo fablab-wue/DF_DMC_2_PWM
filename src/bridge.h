@@ -35,6 +35,10 @@ class DmcBridge {
   void maybeSendPositionReport();
   void maybeUnsolicitedGio();
   void maybeFinishPath();
+  void maybeUpdateShoot();
+  void clearShoot();
+  void handleShootFrame(const dfdmc::DmcFrame& frame);
+  void handleShootFrame2(const dfdmc::DmcFrame& frame);
   void fireBloop(unsigned ms);
   void applyFrameTrigger(int dfFrame);
   void pumpPendingPlay();
@@ -59,6 +63,18 @@ class DmcBridge {
   int pendingStart_ = 1;
   int pendingEnd_ = 1;
   unsigned pendingBloopMs_ = 0;
+  bool shootArmed_ = false;
+  bool shootRun_ = false;
+  bool shootShutter_ = false;
+  uint32_t shootT0_ = 0;
+  uint32_t shootDelayMs_ = 0;
+  uint32_t shootAccelMs_ = 0;
+  uint32_t shootCruiseMs_ = 0;
+  uint32_t shootShutterOpenMs_ = 0;
+  uint32_t shootShutterCloseMs_ = 0;
+  uint32_t shootDoneMs_ = 0;
+  int32_t shootEndSteps_[kPwmPins]{};
+  bool shootBlur_[kPwmPins]{};
 };
 
 }  // namespace dfpwm

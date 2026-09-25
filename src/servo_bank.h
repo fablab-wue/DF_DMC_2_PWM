@@ -17,6 +17,8 @@ class ServoBank {
 
   void moveToSteps(int axis0, int32_t steps);
   void slewTo(int axis0, int32_t steps, uint16_t speed);
+  void startBlur(int axis0, int32_t endSteps, uint32_t delayMs, uint32_t accelMs, uint32_t cruiseMs);
+  bool blurEnabled(int axis0) const;
   void setMaxSpeed(int axis0, int32_t stepsPerSec);
   void stopMotion();
   void configure(int axis0, uint8_t flags);
@@ -45,6 +47,16 @@ class ServoBank {
   int motorCount_ = 0;
   int32_t steps_[kPwmPins]{};
   bool enabled_[kPwmPins]{};
+  uint8_t config_[kPwmPins]{};
+  bool blurOn_[kPwmPins]{};
+  int32_t blurStart_[kPwmPins]{};
+  int32_t blurEnd_[kPwmPins]{};
+  float blurV_[kPwmPins]{};
+  uint32_t blurDelayMs_[kPwmPins]{};
+  uint32_t blurAccelMs_[kPwmPins]{};
+  uint32_t blurCruiseMs_[kPwmPins]{};
+  uint32_t blurT0_ = 0;
+  bool blurClock_ = false;
   bool lowerEn_[kPwmPins]{};
   bool upperEn_[kPwmPins]{};
   int32_t lower_[kPwmPins]{};

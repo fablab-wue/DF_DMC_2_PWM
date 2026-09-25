@@ -1,5 +1,6 @@
 #include "bridge.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -56,6 +57,7 @@ void DmcBridge::loop() {
   maybeSendPositionReport();
   maybeUnsolicitedGio();
   maybeFinishPath();
+  maybeUpdateShoot();
   pumpPendingPlay();
   statusLed_.update(dfConnected_);
 }
@@ -101,7 +103,7 @@ void DmcBridge::sendDmcHello(uint32_t id) {
   appendByte(payload, 1);
   appendByte(payload, 0);
   appendDwordLE(payload, static_cast<uint32_t>(kMaxUploadFrames));
-  appendDwordLE(payload, kDmcCapRealTime | kDmcCapRealTimeCamera);
+  appendDwordLE(payload, kDmcCapRealTime | kDmcCapGoMotion | kDmcCapGoMotion2 | kDmcCapRealTimeCamera);
   appendWordLE(payload, kHelloProtocolVersion);
   sendDmcFrame(id, kDmcMsgHi, payload);
 }
@@ -158,10 +160,256 @@ void DmcBridge::maybeUnsolicitedGio() {
 
 void DmcBridge::maybeFinishPath() {
   const bool active = servos_.pathActive();
-  if (wasPathActive_ && !active && dfConnected_) {
+  if (wasPathActive_ && !active && dfConnected_ && !shootRun_) {
     sendDmcFrame(0, kDmcMsgRtEnd, {});
   }
   wasPathActive_ = active;
+}
+
+void DmcBridge::clearShoot() {
+  if (shootShutter_) {
+    gio_.setCameraShutter(false);
+    shootShutter_ = false;
+  }
+  shootArmed_ = false;
+  shootRun_ = false;
+}
+
+void DmcBridge::maybeUpdateShoot() {
+  if (!shootRun_) {
+    return;
+  }
+  const uint32_t elapsed = millis() - shootT0_;
+  if (!shootShutter_ && elapsed >= shootShutterOpenMs_) {
+    gio_.setCameraShutter(true);
+    shootShutter_ = true;
+  }
+  if (shootShutter_ && elapsed >= shootShutterCloseMs_) {
+    gio_.setCameraShutter(false);
+    shootShutter_ = false;
+  }
+  if (elapsed >= shootDoneMs_ && !servos_.moving()) {
+    shootRun_ = false;
+  }
+}
+
+static int32_t sampleSteps(const dfdmc::PathTable& path, int axis, double frameTime) {
+  const int lo = path.startFrame() < path.endFrame() ? path.startFrame() : path.endFrame();
+  const int hi = path.startFrame() > path.endFrame() ? path.startFrame() : path.endFrame();
+  if (frameTime < lo) {
+    frameTime = lo;
+  }
+  if (frameTime > hi) {
+    frameTime = hi;
+  }
+  const int f0 = static_cast<int>(floor(frameTime));
+  int f1 = f0 + 1;
+  if (f1 > hi) {
+    f1 = hi;
+  }
+  int local0 = 0;
+  if (!path.localFrame(f0, &local0)) {
+    return 0;
+  }
+  const int32_t p0 = path.positionSteps(axis, local0);
+  if (f1 == f0) {
+    return p0;
+  }
+  int local1 = 0;
+  if (!path.localFrame(f1, &local1)) {
+    return p0;
+  }
+  const double u = frameTime - static_cast<double>(f0);
+  return p0 + static_cast<int32_t>(lround((path.positionSteps(axis, local1) - p0) * u));
+}
+
+void DmcBridge::handleShootFrame(const DmcFrame& frame) {
+  int32_t dfFrame = 0;
+  uint8_t direction = 1;
+  uint32_t exposureMs = 0;
+  uint16_t blurX10 = 0;
+  if (frame.payload.size() < 11 || !readSignedDwordLE(frame.payload, 0, &dfFrame) ||
+      !readByte(frame.payload, 4, &direction) || !readDwordLE(frame.payload, 5, &exposureMs) ||
+      !readWordLE(frame.payload, 9, &blurX10)) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
+    return;
+  }
+  if (servos_.moving() || shootRun_) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrMoving);
+    return;
+  }
+  if (exposureMs < 1 || exposureMs > 60000) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
+    return;
+  }
+  if (blurX10 == 0) {
+    blurX10 = 1000;
+  }
+  const int n = servos_.motorCount();
+  bool overrideAxis[kPwmPins] = {};
+  int32_t posA[kPwmPins] = {};
+  int32_t posB[kPwmPins] = {};
+  size_t off = 11;
+  while (off + 9 <= frame.payload.size()) {
+    uint8_t motor = 0;
+    int32_t a = 0;
+    int32_t b = 0;
+    if (!readByte(frame.payload, off, &motor) || !readSignedDwordLE(frame.payload, off + 1, &a) ||
+        !readSignedDwordLE(frame.payload, off + 5, &b)) {
+      break;
+    }
+    if (motorIndexValid(motor)) {
+      overrideAxis[motor - 1] = true;
+      posA[motor - 1] = a;
+      posB[motor - 1] = b;
+    }
+    off += 9;
+  }
+  const int dirSign = direction ? 1 : -1;
+  const double dt = static_cast<double>(blurX10) * 0.0005;
+  const double te = static_cast<double>(exposureMs) / 1000.0;
+  for (int axis = 0; axis < n; ++axis) {
+    int32_t pose = servos_.positionSteps(axis);
+    int local = 0;
+    if (path_.localFrame(dfFrame, &local)) {
+      pose = path_.positionSteps(axis, local);
+    }
+    int32_t openPose = pose;
+    int32_t closePose = pose;
+    if (servos_.blurEnabled(axis) && overrideAxis[axis]) {
+      const double delta = (0.5 - fabs(dt)) * static_cast<double>(posB[axis] - posA[axis]);
+      openPose = posA[axis] + static_cast<int32_t>(lround(delta));
+      closePose = posB[axis] - static_cast<int32_t>(lround(delta));
+    } else if (servos_.blurEnabled(axis) && !path_.empty()) {
+      openPose = sampleSteps(path_, axis, static_cast<double>(dfFrame) - dirSign * dt);
+      closePose = sampleSteps(path_, axis, static_cast<double>(dfFrame) + dirSign * dt);
+    }
+    const int32_t span = closePose - openPose;
+    const int sign = span >= 0 ? 1 : -1;
+    const double v = te > 0.0 ? fabs(static_cast<double>(span)) / te : 0.0;
+    const int32_t accel = static_cast<int32_t>(lround(0.5 * v));
+    const int32_t pre = openPose - sign * accel;
+    shootEndSteps_[axis] = closePose + sign * accel;
+    shootBlur_[axis] = span != 0;
+    servos_.slewTo(axis, shootBlur_[axis] ? pre : pose, 10000);
+  }
+  shootDelayMs_ = 0;
+  shootAccelMs_ = 1000;
+  shootCruiseMs_ = exposureMs;
+  shootShutterOpenMs_ = 1000;
+  shootShutterCloseMs_ = 1000 + exposureMs;
+  shootDoneMs_ = 2000 + exposureMs;
+  shootShutter_ = false;
+  shootRun_ = false;
+  shootArmed_ = true;
+  sendDmcAck(frame.id, frame.type, kDmcAckOk);
+}
+
+void DmcBridge::handleShootFrame2(const DmcFrame& frame) {
+  int32_t dfFrame = 0;
+  uint32_t exposureMs = 0;
+  uint16_t openWord = 0;
+  uint16_t closeWord = 0;
+  if (frame.payload.size() < 12 || !readSignedDwordLE(frame.payload, 0, &dfFrame) ||
+      !readDwordLE(frame.payload, 4, &exposureMs) || !readWordLE(frame.payload, 8, &openWord) ||
+      !readWordLE(frame.payload, 10, &closeWord)) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
+    return;
+  }
+  if (servos_.moving() || shootRun_) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrMoving);
+    return;
+  }
+  if (exposureMs == 0) {
+    exposureMs = 1000;
+  }
+  if (exposureMs > 60000) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
+    return;
+  }
+  const int16_t shutterOpen = static_cast<int16_t>(openWord);
+  const int16_t shutterClose = static_cast<int16_t>(closeWord);
+  if (shutterClose <= shutterOpen) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
+    return;
+  }
+
+  const int n = servos_.motorCount();
+  bool overrideAxis[kPwmPins] = {};
+  int32_t posA[kPwmPins] = {};
+  int32_t posB[kPwmPins] = {};
+  size_t off = 12;
+  while (off + 9 <= frame.payload.size()) {
+    uint8_t motor = 0;
+    int32_t a = 0;
+    int32_t b = 0;
+    if (!readByte(frame.payload, off, &motor) || !readSignedDwordLE(frame.payload, off + 1, &a) ||
+        !readSignedDwordLE(frame.payload, off + 5, &b)) {
+      break;
+    }
+    if (motorIndexValid(motor)) {
+      overrideAxis[motor - 1] = true;
+      posA[motor - 1] = a;
+      posB[motor - 1] = b;
+    }
+    off += 9;
+  }
+
+  const double te = static_cast<double>(exposureMs) / 1000.0;
+  const double degrees = static_cast<double>(shutterClose - shutterOpen);
+  const double secondsPerDegree = te / degrees;
+  const double moveT = 360.0 * secondsPerDegree;
+  const uint32_t moveMs = static_cast<uint32_t>(lround(moveT * 1000.0));
+  const uint32_t accelMs = static_cast<uint32_t>(lround(moveT * 0.125 * 1000.0));
+  const uint32_t cruiseMs = moveMs > 2 * accelMs ? moveMs - 2 * accelMs : 0;
+  uint32_t delayMs = 0;
+  uint32_t shutterOpenMs = 0;
+  if (shutterOpen < 0) {
+    delayMs = static_cast<uint32_t>(lround(-shutterOpen * secondsPerDegree * 1000.0));
+    shutterOpenMs = 0;
+  } else {
+    shutterOpenMs = static_cast<uint32_t>(lround(shutterOpen * secondsPerDegree * 1000.0));
+  }
+  const uint32_t shutterCloseMs = shutterOpenMs + exposureMs;
+  uint32_t postMs = 0;
+  if (shutterClose > 360) {
+    postMs = static_cast<uint32_t>(lround((shutterClose - 360) * secondsPerDegree * 1000.0));
+  }
+  const uint32_t doneMs = delayMs + moveMs + postMs;
+  if (doneMs > 120000 || accelMs < 1) {
+    sendDmcAck(frame.id, frame.type, kDmcAckErrRange);
+    return;
+  }
+
+  for (int axis = 0; axis < n; ++axis) {
+    int32_t pose = servos_.positionSteps(axis);
+    int local = 0;
+    if (path_.localFrame(dfFrame, &local)) {
+      pose = path_.positionSteps(axis, local);
+    }
+    int32_t startPose = pose;
+    int32_t endPose = pose;
+    if (servos_.blurEnabled(axis) && overrideAxis[axis]) {
+      startPose = posA[axis];
+      endPose = posB[axis];
+    } else if (servos_.blurEnabled(axis) && !path_.empty()) {
+      startPose = sampleSteps(path_, axis, static_cast<double>(dfFrame) - 0.5);
+      endPose = sampleSteps(path_, axis, static_cast<double>(dfFrame) + 0.5);
+    }
+    shootBlur_[axis] = startPose != endPose;
+    shootEndSteps_[axis] = endPose;
+    servos_.slewTo(axis, shootBlur_[axis] ? startPose : pose, 10000);
+  }
+  shootDelayMs_ = delayMs;
+  shootAccelMs_ = accelMs;
+  shootCruiseMs_ = cruiseMs;
+  shootShutterOpenMs_ = shutterOpenMs;
+  shootShutterCloseMs_ = shutterCloseMs;
+  shootDoneMs_ = doneMs;
+  shootShutter_ = false;
+  shootRun_ = false;
+  shootArmed_ = true;
+  sendDmcAck(frame.id, frame.type, kDmcAckOk);
 }
 
 void DmcBridge::fireBloop(unsigned ms) {
@@ -319,6 +567,7 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
         break;
       }
       servos_.stopMotion();
+      clearShoot();
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
       sendMotorPositions(frame.id);
       break;
@@ -326,6 +575,7 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
     case kDmcMsgMotorStopAll:
     case kDmcMsgMotorHardStop:
       servos_.stopMotion();
+      clearShoot();
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
       sendMotorPositions(frame.id);
       break;
@@ -564,7 +814,30 @@ void DmcBridge::handleMotorOrRt(const DmcFrame& frame) {
       sendDmcAck(frame.id, frame.type, kDmcAckOk);
       break;
     }
+    case kDmcMsgRtShootFrame:
+      handleShootFrame(frame);
+      break;
+    case kDmcMsgRtShootFrame2:
+      handleShootFrame2(frame);
+      break;
     case kDmcMsgRtGo:
+      if (shootArmed_) {
+        if (servos_.moving() || shootRun_) {
+          sendDmcAck(frame.id, frame.type, kDmcAckErrNotInPosition);
+          break;
+        }
+        shootT0_ = millis();
+        for (int axis = 0; axis < servos_.motorCount(); ++axis) {
+          if (shootBlur_[axis]) {
+            servos_.startBlur(axis, shootEndSteps_[axis], shootDelayMs_, shootAccelMs_, shootCruiseMs_);
+          }
+        }
+        shootArmed_ = false;
+        shootRun_ = true;
+        shootShutter_ = false;
+        sendDmcAck(frame.id, frame.type, kDmcAckOk);
+        break;
+      }
       if (path_.empty()) {
         sendDmcAck(frame.id, frame.type, kDmcAckErrGeneral);
         break;

@@ -1,5 +1,7 @@
 #include "servo_bank.h"
 
+#include <cmath>
+
 #include <dmc_protocol.h>
 #include <hardware/gpio.h>
 #include <hardware/pwm.h>
@@ -35,7 +37,9 @@ void ServoBank::begin(int motorCount) {
     gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_8MA);
     steps_[s] = 0;
     enabled_[s] = false;
-    maxStepsPerSec_[s] = 4000;
+    maxStepsPerSec_[s] = 40000;
+    config_[s] = 0;
+    blurOn_[s] = false;
     slewOn_[s] = false;
     lowerEn_[s] = false;
     upperEn_[s] = false;
@@ -145,11 +149,96 @@ void ServoBank::slewTo(int axis0, int32_t steps, uint16_t speed) {
   }
 }
 
+bool ServoBank::blurEnabled(int axis0) const {
+  return axis0 >= 0 && axis0 < motorCount_ && (config_[axis0] & dfdmc::kDmcMotorConfigBlur) != 0;
+}
+
+void ServoBank::startBlur(int axis0, int32_t endSteps, uint32_t delayMs, uint32_t accelMs, uint32_t cruiseMs) {
+  if (axis0 < 0 || axis0 >= motorCount_ || accelMs < 1) {
+    return;
+  }
+  pathActive_ = false;
+  slewOn_[axis0] = false;
+  if (!blurClock_) {
+    blurT0_ = millis();
+    blurClock_ = true;
+  }
+  blurStart_[axis0] = steps_[axis0];
+  blurEnd_[axis0] = clampSteps(axis0, endSteps);
+  blurDelayMs_[axis0] = delayMs;
+  blurAccelMs_[axis0] = accelMs;
+  blurCruiseMs_[axis0] = cruiseMs;
+  const double dist = static_cast<double>(blurEnd_[axis0] - blurStart_[axis0]);
+  const double rampSec = static_cast<double>(accelMs) / 1000.0;
+  const double moveSec = rampSec + static_cast<double>(cruiseMs) / 1000.0;
+  double v = moveSec > 0.0 ? fabs(dist) / moveSec : 0.0;
+  const double vmax = maxStepsPerSec_[axis0] < 1 ? 1.0 : static_cast<double>(maxStepsPerSec_[axis0]);
+  if (v > vmax) {
+    v = vmax;
+  }
+  blurV_[axis0] = static_cast<float>(v);
+  blurOn_[axis0] = true;
+  movingMask_ |= (1u << axis0);
+}
+
+static int32_t blurPose(int32_t start, int32_t end, float v, uint32_t delayMs, uint32_t accelMs, uint32_t cruiseMs,
+                        uint32_t elapsedMs) {
+  const double sign = end >= start ? 1.0 : -1.0;
+  const double t = static_cast<double>(elapsedMs) / 1000.0;
+  const double delay = static_cast<double>(delayMs) / 1000.0;
+  const double accel = static_cast<double>(accelMs) / 1000.0;
+  const double cruise = static_cast<double>(cruiseMs) / 1000.0;
+  const double vel = v;
+  double s = 0.0;
+  if (t <= delay || accel <= 0.0) {
+    s = 0.0;
+  } else {
+    const double u = t - delay;
+    if (u < accel) {
+      s = 0.5 * vel / accel * u * u;
+    } else if (u < accel + cruise) {
+      s = 0.5 * vel * accel + vel * (u - accel);
+    } else if (u < accel + cruise + accel) {
+      const double w = u - accel - cruise;
+      s = 0.5 * vel * accel + vel * cruise + (vel * w - 0.5 * vel / accel * w * w);
+    } else {
+      s = vel * (cruise + accel);
+    }
+  }
+  int32_t pos = start + static_cast<int32_t>(lround(sign * s));
+  if (sign > 0.0 && pos > end) {
+    pos = end;
+  }
+  if (sign < 0.0 && pos < end) {
+    pos = end;
+  }
+  return pos;
+}
+
 void ServoBank::slewUpdate() {
   if (pathActive_) {
     return;
   }
   const uint32_t now = millis();
+  bool anyBlur = false;
+  for (int a = 0; a < motorCount_; ++a) {
+    if (!blurOn_[a]) {
+      continue;
+    }
+    anyBlur = true;
+    const uint32_t elapsed = now - blurT0_;
+    const uint32_t totalMs = blurDelayMs_[a] + blurAccelMs_[a] + blurCruiseMs_[a] + blurAccelMs_[a];
+    steps_[a] = clampSteps(a, blurPose(blurStart_[a], blurEnd_[a], blurV_[a], blurDelayMs_[a], blurAccelMs_[a],
+                                       blurCruiseMs_[a], elapsed));
+    writeAxis(a);
+    if (elapsed >= totalMs) {
+      blurOn_[a] = false;
+      movingMask_ &= ~(1u << a);
+    }
+  }
+  if (!anyBlur) {
+    blurClock_ = false;
+  }
   uint32_t dt = now - slewLastMs_;
   if (dt == 0) {
     return;
@@ -184,8 +273,10 @@ void ServoBank::slewUpdate() {
 void ServoBank::stopMotion() {
   pathActive_ = false;
   movingMask_ = 0;
+  blurClock_ = false;
   for (int a = 0; a < motorCount_; ++a) {
     slewOn_[a] = false;
+    blurOn_[a] = false;
   }
 }
 
@@ -193,6 +284,7 @@ void ServoBank::configure(int axis0, uint8_t flags) {
   if (axis0 < 0 || axis0 >= motorCount_) {
     return;
   }
+  config_[axis0] = flags;
   enabled_[axis0] = (flags & dfdmc::kDmcMotorConfigEnabled) != 0;
   writeAxis(axis0);
 }
