@@ -14,6 +14,8 @@ DF_DMC_2_PWM  (Raspberry Pi Pico)
 
 Pins: [pins.md](pins.md). DIP: [dip.md](dip.md). Dragonframe scale: [dragonframe.md](dragonframe.md). Build: [build.md](build.md).
 
+SW4 off runs the DMX mirror at 18 kHz with wrap 254 and compare `L`. SW4 on uses wrap `254 × 255` at about 2 kHz and compare `L × L`.
+
 ## Hello
 
 Dragonframe starts with `MSG_HI` (`0x0001`). This board replies as **`jDF-PWM V1 <servos>S+<lights>L+2O+1I+CT+DMX`**. `<servos>` is the DIP motor count and `<lights>` is how many of the remaining pins mirror DMX. SW1 on, SW2 and SW3 off is **`jDF-PWM V1 8S+8L+2O+1I+CT+DMX`**. The name is at most 32 bytes. An unsolicited hello is also sent when the USB serial port opens.

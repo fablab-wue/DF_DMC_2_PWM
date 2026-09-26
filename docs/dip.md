@@ -17,12 +17,14 @@ SW1 is the high bit, SW3 the low bit. Code 0..6 → `motors = code × 2`. Code 7
 | ON | ON | OFF | motors 1..12, PWM_13..16 = DMX 1..4 |
 | ON | ON | ON | motors 1..16, no DMX on PWM |
 
-Motor counts are even so each RP2040 PWM slice (GPIO pairs 0–1, 2–3, …) is entirely servo rate or entirely 18 kHz.
+Motor counts are even so each RP2040 PWM slice (GPIO pairs 0–1, 2–3, …) is entirely servo rate or entirely the DMX mirror rate.
 
 | SW4 | PWM mirror |
 |-----|------------|
-| OFF | linear (DMX level / 255) |
-| ON | square curve: duty = level × level / 255 (0 = 0%, 128 ≈ 25%, 255 = 100%) |
+| OFF | 18 kHz, wrap 254, compare `L` (0 = low, 255 = high) |
+| ON | about 2 kHz, wrap `254 × 255`, compare `L × L` (level 1 is one count, 128 is about 25%, 255 is full on) |
+
+SW4 on needs the wide counter so dim steps are not rounded to zero. The clock divider cannot go below 1, so 64771 counts at 133 MHz is about 2 kHz.
 
 The square curve is only on the PWM pins, for LEDs that should look linear. The DMX wire stays raw 0–255 in every mode, including all-motors.
 
