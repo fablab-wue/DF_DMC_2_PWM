@@ -25,13 +25,13 @@ Hello fields, fixed at boot from the DIP:
 - motor count 0, 2, 4, 6, 8, 10, 12, or 16
 - DMX count **512**
 - GIO out **2** / GIO in **1**
-- upload frame count **2048**
+- upload frame count **1440**
 - capabilities `REAL_TIME` + `GO_MOTION` + `GO_MOTION2` + `REAL_TIME_CAMERA`
 - protocol version **2**, firmware `1.0.0`
 
 ## What a move does
 
-A `MOVE` or jog slews toward the target at the speed Dragonframe sent. Speed 1 is the slow end, 10000 is the axis max velocity (`MOTOR_SET_SPEED`). Until that arrives, max velocity is 40000 steps/s. There is no acceleration ramp. Go motion is separate: 1 s acceleration, constant speed for the exposure, then 1 s deceleration, with the shutter open only during the constant phase. The blur speed is capped at that max. While a realtime path is playing, each frame is held until the next frame (no ramp between frames). Position reports go out about every 100 ms while a motor is moving. `MSG_RT_END` is sent when playback finishes.
+A `MOVE` or jog slews toward the target at the speed Dragonframe sent. Speed 1 is the slow end, 10000 is the axis max velocity (`MOTOR_SET_SPEED`). Until that arrives, max velocity is 40000 steps/s. There is no acceleration ramp. Go motion is separate: 1 s acceleration, constant speed for the exposure, then 1 s deceleration, with the shutter open only during the constant phase. The blur speed is capped at that max. While a realtime path is playing, each frame is held until the next frame (no ramp between frames). `MSG_RT_RUN_MOVE` moves to the start pose and waits for go. Each new frame sends one position report. A lighting program stores up to 32 DMX channels across 1440 frames. `MSG_RT_END` is sent when playback finishes.
 
 A motor with the enable flag clear goes limp (PWM level 0). Enable restores the last pulse.
 

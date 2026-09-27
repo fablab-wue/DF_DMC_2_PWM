@@ -30,4 +30,6 @@ A motor with the enable flag clear goes limp (PWM level 0). Enable restores the 
 
 ## Realtime preview
 
-Dragonframe downloads the path (`MSG_RT_UPLOAD_*`). Playback holds each frame’s steps until the next frame. There is no interpolation and no accel. Position reports go out about every 100 ms while a path is playing. `MSG_RT_END` is sent when playback finishes.
+Dragonframe downloads the path (`MSG_RT_UPLOAD_*`). Playback holds each frame’s steps until the next frame. There is no interpolation and no accel. `MSG_RT_RUN_MOVE` moves to the start pose and waits for `MSG_RT_GO`. Each new frame sends one position report with that frame number. `MSG_RT_END` is sent when playback finishes.
+
+For a servo test, set steps per unit to 1 and keyframe 0 and 15000. The main animation transport does not send `MSG_RT_POSITION_FRAME` (`0x0110`). Scrubbing and playing a move in Arc does.

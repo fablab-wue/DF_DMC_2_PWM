@@ -8,7 +8,7 @@
 namespace dfpwm {
 
 constexpr int kPwmPins = 16;
-constexpr int kMaxUploadFrames = 2048;
+constexpr int kMaxUploadFrames = 1440;
 constexpr int kDmxChannels = 512;
 
 // 133 MHz / 6.625 / 65536 = 306.35 Hz. One count is 49.812 ns.

@@ -30,17 +30,21 @@ GP16 is **TX only** (PIO UART). A MAX485 (or SN75176 / similar) turns TTL into R
 XLR3 (DMX512): **pin 1** shield/GND, **pin 2** Data− (A), **pin 3** Data+ (B). Put **120 Ω** between A and B at the **last fixture**. If this board is a bus end, terminate there too.
 
 ```text
-  Pico                                MAX485                 XLR3 (female, to fixtures)
-  3.3V ------------------------------- VCC
-  GND  ------------------------------- GND --------------- pin 1  shield / GND
-  GP16 ------------------------------- DI
-  3.3V ------------------------------- DE
-  3.3V ------------------------------- /RE
-                                       RO  (leave open)
-                                       A  ---------------- pin 2  Data−
-                                       B  ---------------- pin 3  Data+
+  Pico                           MAX485                         XLR3 female
+  5V  ------------------------  8 VCC
+  GND ------------------------  5 GND  ---------------------  pin 1 + shield
 
-  Last fixture (or this board if it is a bus end):
+  GP16 -----------------------  4 DI
+
+  5V  ----------------------+-  3 DE
+                            +-  2 /RE
+
+                                1 RO     leave open
+
+                                7 B   ---------------------  pin 2  Data−
+                                6 A   ---------------------  pin 3  Data+
+
+  Last fixture:
        A ---- 120 Ω ---- B
 ```
 
@@ -55,14 +59,15 @@ Firmware drives GP17 as **open-collector + pull-up** (active low). The pad is **
 ```text
         3.3 V                         5 V
           |                            |
-         BAT54*                       10k
+         BAT54*                      [10k]
           |                            |
-  GP17 -- 330 Ω -- G (2N7000)         |
-                    S -------- D ------+---- camera TTL in
-                    |
-                   GND
+  GP17 ---+---[330 Ω]-- G (2N7000)     |
+                                       |
+                        D -------------+---- camera TTL in
 
-  Pico GND -------------------------------- camera GND
+                        S
+                        |
+  Pico GND -------------+------------------- camera GND
 ```
 
 Idle (pad released): FET off → output high. Shutter (pad LOW): FET on → output 0 V.
@@ -74,16 +79,11 @@ Idle (pad released): FET off → output high. Shutter (pad LOW): FET on → outp
 Active high. Do not hang a 5 V buzzer on the GPIO. Use an NPN low-side switch.
 
 ```text
-  5 V ---- buzzer+ ----+
-                       |
-                   collector
-                      BC337 / BC547
-                   emitter ---- GND
-                      base
-                       |
-                      1 kΩ
-                       |
-                      GP22
+  5 V ----(+buzzer)---collector
+                                 BC337 / BC547
+  GP22 -----[1 kΩ]----base
+
+  GND ----------------emitter
 ```
 
 Magnetic buzzers: 1N4148 across the buzzer, cathode toward 5 V. Active (self-drive) buzzers: omit the diode.
