@@ -4,6 +4,16 @@
 
 Board: **Raspberry Pi Pico**. Core: earlephilhower Arduino Pico via PlatformIO (`env:rpipico`, `board = pico`).
 
+## Flash a release
+
+No compiler and no PlatformIO.
+
+1. Download `DF_DMC_2_PWM-<tag>-pico.uf2` from the [Releases](https://github.com/fablab-wue/DF_DMC_2_PWM/releases) page.
+2. Hold **BOOTSEL**, plug in USB, then release BOOTSEL.
+3. Copy the UF2 onto the `RPI-RP2` drive. The board reboots into the new firmware.
+
+A new file is built when a `v*` tag is pushed. Rebuild an existing tag from the Actions page with **Run workflow**.
+
 ## Prerequisites
 
 1. Install [VS Code](https://code.visualstudio.com/).
