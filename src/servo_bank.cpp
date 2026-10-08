@@ -289,6 +289,13 @@ void ServoBank::configure(int axis0, uint8_t flags) {
   writeAxis(axis0);
 }
 
+uint32_t ServoBank::limitFault(int axis0, int32_t steps) const {
+  if (axis0 < 0 || axis0 >= motorCount_) {
+    return 0;
+  }
+  return dfdmc::softLimitFault(lowerEn_[axis0], lower_[axis0], upperEn_[axis0], upper_[axis0], steps);
+}
+
 void ServoBank::setLimits(int axis0, bool lowerEn, int32_t lower, bool upperEn, int32_t upper) {
   if (axis0 < 0 || axis0 >= motorCount_) {
     return;
@@ -326,6 +333,16 @@ void ServoBank::applyFrame(int dfFrame) {
 
 void ServoBank::moveToFramePose(int dfFrame) { applyFrame(dfFrame); }
 
+void ServoBank::applyPlaybackFrame(int dfFrame) {
+  if (path_ == nullptr) {
+    return;
+  }
+  currentFrame_ = dfFrame;
+  for (int a = 0; a < motorCount_; ++a) {
+    moveToSteps(a, path_->sampleSteps(a, static_cast<double>(dfFrame), true));
+  }
+}
+
 void ServoBank::setPathSliceUs(uint32_t us) {
   if (us < 1000) {
     us = 1000;
@@ -342,8 +359,7 @@ void ServoBank::pathGoRange(int dfStart, int dfEnd) {
   currentFrame_ = dfStart;
   pathActive_ = true;
   movingMask_ = motorCount_ == 0 ? 0 : (motorCount_ >= 32 ? 0xFFFFFFFFu : ((1u << motorCount_) - 1u));
-  const uint32_t sliceMs = pathSliceUs_ / 1000u;
-  nextFrameMs_ = millis() + (sliceMs == 0 ? 1 : sliceMs);
+  nextFrameUs_ = micros() + pathSliceUs_;
 }
 
 void ServoBank::update() {
@@ -351,12 +367,14 @@ void ServoBank::update() {
     slewUpdate();
     return;
   }
-  const uint32_t now = millis();
-  if (static_cast<int32_t>(now - nextFrameMs_) < 0) {
+  const uint32_t now = micros();
+  if (static_cast<int32_t>(now - nextFrameUs_) < 0) {
     return;
   }
-  const uint32_t sliceMs = pathSliceUs_ / 1000u;
-  nextFrameMs_ += sliceMs == 0 ? 1 : sliceMs;
+  nextFrameUs_ += pathSliceUs_;
+  if (static_cast<int32_t>(now - nextFrameUs_) > static_cast<int32_t>(pathSliceUs_)) {
+    nextFrameUs_ = now;
+  }
   const int next = currentFrame_ + playDir_;
   const bool done = playDir_ > 0 ? next > playEndFrame_ : next < playEndFrame_;
   if (done) {
@@ -365,7 +383,7 @@ void ServoBank::update() {
     currentFrame_ = playEndFrame_;
     return;
   }
-  applyFrame(next);
+  applyPlaybackFrame(next);
 }
 
 }  // namespace dfpwm
